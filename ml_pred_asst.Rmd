@@ -1,0 +1,151 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Serg C"
+date: "November 26, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(caret)
+require(randomForest)
+```
+### Machine Learning, Coursera, Johns Hopkins University
+
+## Synopsis
+
+Human Activity Recognition (HAR) has emerged as a key research area in the last years and is gaining increasing interest due to many potential applications for HAR, like: elderly monitoring, life log systems for monitoring energy expenditure and for supporting weight-loss programs, and digital assistants for weight lifting exercises.
+
+[This](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) research was focused on investigating "how (well)" some activity is being performed by 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The data from multiple sensors were collected in the dataset. 
+
+The goal of this project is to predict the manner or "how well" the participants did the exercise using data from accelerometers on the belt, forearm, arm, and dumbell.
+
+## Data 
+
+The data for this project are available here:
+[training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+[testing](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) 
+
+## Data Preparation 
+#### 1. Download and read the dataset
+
+```{r label.1}
+wdir <- '.'
+if(!file.exists("pml-training.csv")){
+  fil <- paste(wdir,'pml-training.csv',sep="/")
+  fUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+  download.file( fUrl, fil )
+}
+if(!file.exists("pml-testing.csv")){
+  fil <- paste(wdir,'pml-testing.csv',sep="/")
+  fUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+  download.file( fUrl, fil )
+}
+pml.training <- read.csv( paste( wdir,"pml-training.csv",sep="/") )
+pml.testing  <- read.csv( paste( wdir,"pml-testing.csv",sep="/") )
+```
+
+#### 2. Extract accelerometers data then partition it into train, test and validation sets
+
+Extract all accelerometer variables plus 'classe' from both datasets.
+Carve a validation partition off the training data set.
+Basic data exploration. 
+
+```{r label.2}
+training<- pml.training[,c(160,grep('^accel',names(pml.training)))]
+testing <- pml.testing [,c(160,grep('^accel',names(pml.training)))]
+
+inTrn <- createDataPartition(y=training$classe, p=0.5, list=FALSE)
+### inTrn <- createDataPartition(y=training$classe, p=0.1, list=FALSE)
+train <- training[ inTrn,]
+inVal <- createDataPartition(y=training[-inTrn,]$classe, p=0.8, list=FALSE)
+vldt  <- training[ inVal,]
+test  <- training[-inVal,]
+```
+
+Here is a summary of the datasets for model building
+```{r label.22}
+dim(train);dim(vldt);dim(test)
+str(train)
+```
+
+## Model Selection 
+
+Here we will fit several models and then choose the one based on out-of-sample accuracy.
+
+### 1. Boosting Tree model with cross-validation
+
+```{r label.3}
+set.seed( 12345 )
+fit1<-train( classe~., data=train, method="gbm", verbose=FALSE,
+              trControl = trainControl(method="cv", number = 5))
+print( fit1 )
+plot( fit1 )
+plot(fit1$finalModel)
+prd1 <- predict(fit1, vldt)
+confusionMatrix(prd1, vldt$classe)
+```
+
+ Now we will try to tune over the number/complexity of trees.
+
+```{r label.4}
+f1Grid <- expand.grid(.interaction.depth=(1:3)*2,
+ .n.trees=(1:5)*20, .shrinkage=.1, .n.minobsinnode = c(10))
+
+fit1<-train( classe~., data=train, method="gbm", verbose=FALSE,
+              trControl = trainControl(method="cv", number = 5),
+              tuneGrid=f1Grid)
+prd1 <- predict(fit1, vldt)
+confusionMatrix(prd1, vldt$classe)
+```
+
+The accuracy of the tuned model can be visualized as follws.
+
+```{r label.5}
+resampleHist(fit1)
+```
+
+### 2. Random Forests model
+
+Here we fit a random forest model with five fold cross validation.
+Caret will use cross validation to select best predictors. 
+
+```{r label.6}
+fit2<-train( classe~., data=train, method="rf" , importance = T,
+              trControl = trainControl(method="cv", number = 5 ))
+varImp(fit2)
+print( fit2 )
+plot(fit2$finalModel)
+```
+```{r label.7}
+prd2 <- predict(fit2,vldt)
+confusionMatrix(prd2, vldt$classe)
+plot(varImp(fit2))
+```
+
+###  3. Bagging
+
+The default settings will be used for treebag method.
+
+```{r label.8}
+fit3<-train( classe~., data=train, method="treebag")
+print( fit3 )
+```
+```{r label.9}
+prd3 <- predict(fit3,vldt)
+confusionMatrix(prd3, vldt$classe)
+varImp(fit3)
+```
+
+## Compare models
+
+ To summup the results accuracy of the models is printed in a table.
+ It looks like the random forest model has better accuracy.
+
+```{r label.10, echo = FALSE}
+data.frame(
+gbm=confusionMatrix(prd1, vldt$classe)$overall[c("Accuracy","Kappa")],
+rf=confusionMatrix(prd2, vldt$classe)$overall[c("Accuracy","Kappa")],
+treebag=confusionMatrix(prd3, vldt$classe)$overall[c("Accuracy","Kappa")]
+)
+```
